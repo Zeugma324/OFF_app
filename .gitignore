@@ -1,0 +1,6 @@
+data/
+__pycache__
+temp.py
+query_results.csv
+column_names.csv
+.DS_Store
