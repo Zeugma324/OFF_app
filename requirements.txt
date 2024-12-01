@@ -3,3 +3,4 @@ uvicorn[standard]
 duckdb
 pymongo
 mysql-connector-python
+typing

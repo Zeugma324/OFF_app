@@ -4,54 +4,17 @@ requetages des différentes base de données.
 Il contient également les requêtes GET.
 """
 
-from fastapi import FastAPI
-import duckdb
-from pymongo import MongoClient
-import mysql.connector
-from mysql.connector import Error
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List
+from app import (
+    recipes_collection,
+    con,
+    PARQUET_FILE,
+    create_connection,
+)
 
 app = FastAPI()
-
-con = duckdb.connect()
-
-PARQUET_FILE = "data/produits_filtrés.parquet"
-
-mongo_client = MongoClient("mongodb://mongo:27017")
-db = mongo_client["my_mongodb"]
-recipes_collection = db["recipes"]
-
-
-def create_connection(host_name, user_name, user_password, db_name):
-    """
-    Fonction qui créé une connexion a la base de données MySQL
-    """
-
-    connexion = None
-    try:
-        connexion = mysql.connector.connect(
-            host=host_name, user=user_name, passwd=user_password, database=db_name
-        )
-        if connexion.is_connected():
-            print("Connexion réussie à MySQL")
-    except Error as e:
-        print(f"Erreur lors de la connexion à MySQL : {e}")
-
-    return connexion
-
-
-def execute_query(connexion, query):
-    """
-    Fonction qui execute une requete sur la base de données MySQL,
-    prend la connexion et la requete en parametre
-    """
-
-    cursor = connexion.cursor()
-    try:
-        cursor.execute(query)
-        connexion.commit()
-        print("Requête exécutée avec succès")
-    except Error as e:
-        print(f"Erreur lors de l'exécution de la requête : {e}")
 
 
 @app.get("/heartbeat")
@@ -145,3 +108,50 @@ async def categories_et_indicateurs():
         },
         "categoriesProduitAlimentaire": categories_list,
     }
+
+@app.get("/type")
+async def get_type():
+
+    return {"beverages",
+            "breakfast",
+            "main-dish",
+            "desserts",
+            "snacks", 
+            "appetizers", 
+            "side-dishes",
+            "60-minutes-or-less",
+            "30-minutes-or-less",
+            "4-hours-or-less",
+            "15-minutes-or-less",
+            "vegetables",
+            "meat",
+            "dietary",
+            "3-steps-or-less"}
+
+#definition du modele pydantic pour le payload
+class RecipesRequest(BaseModel):
+    type: List[str] = []
+
+class RecipesResponse(BaseModel):
+    nom: str
+    ingredients: List[str]
+    description: str
+
+@app.post("/recette", response_model=RecipesResponse)
+async def get_recette(request: RecipesRequest):
+    types_recherche = request.type
+
+    query = {}
+    if types_recherche:
+        query["tags"] = {"$in" : types_recherche}
+        
+        recette = recipes_collection.find_one(query, {"name": 1, "ingredients": 1, "description": 1})
+
+        if not recette:
+            raise HTTPException(status_code=404, detail="Aucune recette trouvée pour les types donnés.")
+
+        return RecipesResponse(
+            nom=recette["name"],
+            ingredients=recette["ingredients"],
+            description=recette.get("description", "Aucune description disponible.")
+        )

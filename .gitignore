@@ -1,6 +1,9 @@
 data/
 __pycache__
 temp.py
+temp2.py
 query_results.csv
 column_names.csv
 .DS_Store
+distinct_tags.csv
+backup/
