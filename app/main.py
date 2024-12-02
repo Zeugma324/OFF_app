@@ -109,34 +109,40 @@ async def categories_et_indicateurs():
         "categoriesProduitAlimentaire": categories_list,
     }
 
+
 @app.get("/type")
 async def get_type():
 
-    return {"beverages",
-            "breakfast",
-            "main-dish",
-            "desserts",
-            "snacks", 
-            "appetizers", 
-            "side-dishes",
-            "60-minutes-or-less",
-            "30-minutes-or-less",
-            "4-hours-or-less",
-            "15-minutes-or-less",
-            "vegetables",
-            "meat",
-            "dietary",
-            "3-steps-or-less"}
+    return {
+        "beverages",
+        "breakfast",
+        "main-dish",
+        "desserts",
+        "snacks",
+        "appetizers",
+        "side-dishes",
+        "60-minutes-or-less",
+        "30-minutes-or-less",
+        "4-hours-or-less",
+        "15-minutes-or-less",
+        "vegetables",
+        "meat",
+        "dietary",
+        "3-steps-or-less",
+    }
 
-#definition du modele pydantic pour le payload
+
+# definition du modele pydantic pour le payload
 class RecipesRequest(BaseModel):
     type: List[str] = []
+
 
 class RecipesResponse(BaseModel):
     nom: str
     ingredients: List[str]
     description: str
-    #tags: List[str]
+    # tags: List[str]
+
 
 @app.post("/recette", response_model=RecipesResponse)
 async def get_recette(request: RecipesRequest):
@@ -144,41 +150,47 @@ async def get_recette(request: RecipesRequest):
 
     query = {}
     if types_recherche:
-        query["tags"] = {"$all" : types_recherche}
-        
+        query["tags"] = {"$all": types_recherche}
+
     pipeline = [
-        {"$match" : query},
-        {"$sample" : {"size" : 1}},
-        {"$project" : {"name" : 1, "ingredients":  1, "description": 1, "tags" : 1}}
+        {"$match": query},
+        {"$sample": {"size": 1}},
+        {"$project": {"name": 1, "ingredients": 1, "description": 1, "tags": 1}},
     ]
 
     recette_list = list(recipes_collection.aggregate(pipeline))
     recette = recette_list[0]
 
     if not recette:
-        raise HTTPException(status_code=404, detail="Aucune recette trouvée pour les types donnés.")
-    
+        raise HTTPException(
+            status_code=404, detail="Aucune recette trouvée pour les types donnés."
+        )
+
     return RecipesResponse(
         nom=recette["name"],
         ingredients=recette["ingredients"],
         description=recette.get("description", "Aucune description disponible."),
-        #tags=recette["tags"]
+        # tags=recette["tags"]
     )
+
 
 class recette(BaseModel):
     nomProduit: str = Field(alias="nom")
     ingrédients: List[str]
     description: Optional[str]
 
+
 class indicateursDeQualite_1(BaseModel):
     Nutriscore: Optional[str]
     Nova: Optional[str]
     Ecoscore: Optional[str]
 
+
 class CuisinerRequest(BaseModel):
     recette: recette
     preferenceMarqueProduit: Optional[str] = None
     indicateursDeQualiteSuperieurA: Optional[indicateursDeQualite_1] = None
+
 
 class RecoProduit(BaseModel):
     nomProduit: str
@@ -187,8 +199,10 @@ class RecoProduit(BaseModel):
     categories: Optional[List[str]] = None
     produitDeBase: bool
 
+
 class CuisinerResponse(BaseModel):
     data: Dict[str, List[RecoProduit]]
+
 
 def query_constructor(request, ing):
 
@@ -200,21 +214,21 @@ def query_constructor(request, ing):
         FROM '{PARQUET_FILE}' WHERE product_name LIKE '%{ing}%'"""
 
     if indicateurs and indicateurs.Ecoscore:
-        ecoscore_values = ', '.join(f"'{e}'" for e in indicateurs.Ecoscore)
+        ecoscore_values = ", ".join(f"'{e}'" for e in indicateurs.Ecoscore)
         ecoscore_clause = f" AND ecoscore_grade IN ({ecoscore_values})"
         query += ecoscore_clause
     else:
         query += " AND ecoscore_grade IS NOT NULL"
 
     if indicateurs and indicateurs.Nutriscore:
-        nutriscore_values = ', '.join(f"'{n}'" for n in indicateurs.Nutriscore)
+        nutriscore_values = ", ".join(f"'{n}'" for n in indicateurs.Nutriscore)
         nutriscore_clause = f" AND nutriscore_grade IN ({nutriscore_values})"
         query += nutriscore_clause
     else:
         query += " AND nutriscore_grade IS NOT NULL"
 
     if indicateurs and indicateurs.Nova:
-        nova_values = ', '.join(str(n) for n in indicateurs.Nova)
+        nova_values = ", ".join(str(n) for n in indicateurs.Nova)
         nova_clause = f" AND nova_groups IN ({nova_values})"
         query += nova_clause
     else:
@@ -247,20 +261,19 @@ async def get_cuisiner(request: CuisinerRequest):
     mysql_conn = create_connection(
         "ingredients", "api_endpoint", "abracadabra", "raw_ingredients"
     )
-    
+
     response = {}
     for i in recette.ingrédients:
-        
+
         base_aliment = False
 
         if mysql_conn:
             base_query = f"""SELECT FoodDescription FROM food_name WHERE EstAlimentDeBase = 1 AND FoodDescription LIKE '{i}%' LIMIT 1;"""
-            print("sql :" ,i)
+            print("sql :", i)
             cursor = mysql_conn.cursor()
             cursor.execute(base_query)
             base = cursor.fetchall()
-            
-        
+
         if base:
             for row in base:
                 base = row[0]
@@ -271,10 +284,9 @@ async def get_cuisiner(request: CuisinerRequest):
             results = con.execute(query).fetchall()
             print("COMO ESTA")
             print(results)
-        
+
         if i not in response:
             response[i] = []
-
 
         if base_aliment:
             response[i].append(
@@ -283,7 +295,7 @@ async def get_cuisiner(request: CuisinerRequest):
                     indicateursDeQualite=None,
                     marque=None,
                     categories=None,
-                    produitDeBase=True
+                    produitDeBase=True,
                 )
             )
         else:
@@ -292,7 +304,7 @@ async def get_cuisiner(request: CuisinerRequest):
 
                 if isinstance(categories, str):
                     categories = categories.split(", ")
-                
+
                 brands = brands[0]
 
                 response[i].append(
@@ -301,11 +313,11 @@ async def get_cuisiner(request: CuisinerRequest):
                         indicateursDeQualite=indicateursDeQualite_1(
                             Nutriscore=nutriscore or None,
                             Nova=nova or None,
-                            Ecoscore=ecoscore or None
+                            Ecoscore=ecoscore or None,
                         ),
                         marque=brands or None,
                         categories=categories or None,
-                        produitDeBase=False
+                        produitDeBase=False,
                     )
                 )
         base = []
