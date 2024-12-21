@@ -1,12 +1,17 @@
 """
 Ce fichier main contient l'instancialisation des connexions et 
 requetages des différentes base de données.
-Il contient également les requêtes GET.
+Il contient également les requêtes GET et POST.
 """
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, RootModel, Field
+import os
+from pathlib import Path
 from typing import List, Optional, Dict
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from rapidfuzz.process import extract
+from rapidfuzz.fuzz import partial_ratio
 from app import (
     recipes_collection,
     con,
@@ -112,7 +117,12 @@ async def categories_et_indicateurs():
 
 @app.get("/type")
 async def get_type():
+    """
+    méthode GET pour récuperer les types disponible de recette.
 
+    Returns:
+        Un JSON contenant les types de recettes disponible.
+    """
     return {
         "beverages",
         "breakfast",
@@ -132,12 +142,41 @@ async def get_type():
     }
 
 
+@app.get("/readme")
+async def get_readme():
+    """
+    Retourne le fichier README.md.
+    """
+    readme_path = Path("app/README.md")
+    
+    if not readme_path.exists():
+        raise HTTPException(status_code=404, detail="Fichier README.md introuvable.")
+    
+    return FileResponse(readme_path, media_type="text/markdown", filename="README.md")
+
+
 # definition du modele pydantic pour le payload
 class RecipesRequest(BaseModel):
+    """
+    Template de la requête POST /recette
+
+    Attribute :
+        type: List[str] : Liste des types de la recette
+    """
+
     type: List[str] = []
 
 
 class RecipesResponse(BaseModel):
+    """
+    Template de la réponse à la requête POST /recette
+
+    Attributes :
+        nom: str : nom de la recette
+        ingredients: List[str] : Liste des ingrédients de la recette
+        description: str : description de la recette
+    """
+
     nom: str
     ingredients: List[str]
     description: str
@@ -146,6 +185,16 @@ class RecipesResponse(BaseModel):
 
 @app.post("/recette", response_model=RecipesResponse)
 async def get_recette(request: RecipesRequest):
+    """
+    POST query permettant d'obtenir une recette
+    aléatoire parmis celle disponible selon les critères établit.
+
+    Args:
+        request (RecipesRequest): La requete contenant les types de recette à rechercher
+
+    Returns:
+        RecipesResponse: JSON contenant le nom, ingrédients et description de la recette.
+    """
     types_recherche = request.type
 
     query = {}
@@ -159,59 +208,120 @@ async def get_recette(request: RecipesRequest):
     ]
 
     recette_list = list(recipes_collection.aggregate(pipeline))
-    recette = recette_list[0]
+    local_recette = recette_list[0]
 
-    if not recette:
+    if not local_recette:
         raise HTTPException(
             status_code=404, detail="Aucune recette trouvée pour les types donnés."
         )
 
     return RecipesResponse(
-        nom=recette["name"],
-        ingredients=recette["ingredients"],
-        description=recette.get("description", "Aucune description disponible."),
+        nom=local_recette["name"],
+        ingredients=local_recette["ingredients"],
+        description=local_recette.get("description", "Aucune description disponible."),
         # tags=recette["tags"]
     )
 
 
-class recette(BaseModel):
+class Recette(BaseModel):
+    """
+    Modèle d'une recette.
+
+    Attributes:
+        nomProduit (str): nom du produit
+        ingredients (List[str]): liste des ingrédients de la recette
+        description (Optional[str]): description optionnelle de la recette
+    """
+
     nomProduit: str = Field(alias="nom")
-    ingrédients: List[str]
+    ingredients: List[str]
     description: Optional[str]
 
 
-class indicateursDeQualite_1(BaseModel):
+class IndicateursDeQualite1(BaseModel):
+    """
+    Modèle des indicateurs d'un produit.
+
+    Attributes:
+        Nutriscore (Optional[str]): le nutriscore (optionnel).
+        Nova (Optional[str]): le nova score (optionnel).
+        Ecoscore (Optional[str]): l'ecoscore (optionnel).
+    """
+
     Nutriscore: Optional[str]
     Nova: Optional[str]
     Ecoscore: Optional[str]
 
 
 class CuisinerRequest(BaseModel):
-    recette: recette
+    """
+    Modèle de recommandation de produits.
+
+    Attributes:
+        recette (Recette): la recette de base pour les recommandations.
+        preferenceMarqueProduit (Optional[str]): la marque de preference
+            de l'utilisateur (optionnel)
+        indicateursDeQualiteSuperieurA (Optional[IndicateursDeQualite1]):
+        les indicatgeurs de qualité de préference de l'utilisateur (otpionnel)
+    """
+
+    recette: Recette
     preferenceMarqueProduit: Optional[str] = None
-    indicateursDeQualiteSuperieurA: Optional[indicateursDeQualite_1] = None
+    indicateursDeQualiteSuperieurA: Optional[IndicateursDeQualite1] = None
 
 
 class RecoProduit(BaseModel):
+    """
+    Modèle de recommandation d'un produit.
+
+    Attributes:
+        nomProduit (str): nom du produit.
+        indicateursDeQualite (Optional[IndicateursDeQualite1]):
+            les indicateurs de qualité du produit.
+        marque (Optional[str]): marque du produit.
+        categories (Optional[List[str]]): catégories du produit.
+        produitDeBase (bool): Indique si le produit est un aliment de base.
+    """
+
     nomProduit: str
-    indicateursDeQualite: Optional[indicateursDeQualite_1] = None
+    indicateursDeQualite: Optional[IndicateursDeQualite1] = None
     marque: Optional[str] = None
     categories: Optional[List[str]] = None
     produitDeBase: bool
 
 
 class CuisinerResponse(BaseModel):
+    """
+    Modèle de la réponse de recommandation du produit.
+
+    Attributes:
+        data (Dict[str, List[RecoProduit]]):
+        dictionnaire des recommandations pour chaque ingrédient.
+    """
+
     data: Dict[str, List[RecoProduit]]
 
 
 def query_constructor(request, ing):
+    """
+    Construit une requête SQL en fonction des
+    paramètres utilisateur et de l'ingrédient donné.
 
-    recette = request.recette
+    Args:
+        request: Données de la requête utilisateur.
+        ing: Ingrédient à rechercher.
+
+    Returns:
+        Une chaîne de caractères contenant la requête SQL.
+    """
+
     preference = request.preferenceMarqueProduit
     indicateurs = request.indicateursDeQualiteSuperieurA
 
-    query = f"""SELECT product_name, ecoscore_grade, nutriscore_grade, nova_groups, brands_tags, categories
-        FROM '{PARQUET_FILE}' WHERE product_name LIKE '%{ing}%'"""
+    query = f"""
+        SELECT product_name, ecoscore_grade, nutriscore_grade, nova_groups, brands_tags, categories
+        FROM '{PARQUET_FILE}' WHERE product_name ILIKE '%{ing}%'
+        """
 
     if indicateurs and indicateurs.Ecoscore:
         ecoscore_values = ", ".join(f"'{e}'" for e in indicateurs.Ecoscore)
@@ -238,13 +348,19 @@ def query_constructor(request, ing):
         preference_clause = f""" AND EXISTS (
             SELECT *
             FROM UNNEST(brands_tags) AS brand
-            WHERE CAST(brand AS VARCHAR) LIKE '%{preference}%'
+            WHERE CAST(brand AS VARCHAR) ILIKE '%{preference}%'
             )"""
         query += preference_clause
     else:
         query += " AND brands_tags IS NOT NULL"
 
-    query += " LIMIT 1"
+    query += """
+        ORDER BY 
+            nutriscore_grade ASC NULLS LAST,
+            ecoscore_grade ASC NULLS LAST,
+            nova_groups ASC NULLS LAST
+    """
+    query += " LIMIT 5"
 
     print("Generated Query:")
     print(query)
@@ -254,21 +370,35 @@ def query_constructor(request, ing):
 
 @app.post("/cuisiner", response_model=CuisinerResponse)
 async def get_cuisiner(request: CuisinerRequest):
+    """
+    POST query pour obtenir des recommandations de produits en fonction d'une recette.
+
+    Args:
+        request (CuisinerRequest): requête contenant
+            les informations sur la recette et les préférences utilisateur.
+
+    Returns:
+        CuisinerResponse: réponse contenant les recommandations
+            de produits pour chaque ingrédient de la recette.
+    """
     recette = request.recette
-    preference = request.preferenceMarqueProduit
-    indicateurs = request.indicateursDeQualiteSuperieurA
 
     mysql_conn = create_connection(
         "ingredients", "api_endpoint", "abracadabra", "raw_ingredients"
     )
 
     response = {}
-    for i in recette.ingrédients:
+    for i in recette.ingredients:
 
         base_aliment = False
 
         if mysql_conn:
-            base_query = f"""SELECT FoodDescription FROM food_name WHERE EstAlimentDeBase = 1 AND FoodDescription LIKE '{i}%' LIMIT 1;"""
+            base_query = f"""
+                SELECT FoodDescription 
+                FROM food_name 
+                WHERE EstAlimentDeBase = 1 
+                AND FoodDescription LIKE '{i}%' LIMIT 1;
+                """
             print("sql :", i)
             cursor = mysql_conn.cursor()
             cursor.execute(base_query)
@@ -284,6 +414,37 @@ async def get_cuisiner(request: CuisinerRequest):
             results = con.execute(query).fetchall()
             print("COMO ESTA")
             print(results)
+
+            if not results:
+                print(
+                    f"""
+                      Pas de résultat pour l'ingredient : {i}. 
+                      Utilisation de rapidfuzz pour une recherche approximative...
+                      """
+                )
+                # Charger tous les produits pour une recherche approximative
+                all_products_query = f"""
+                    SELECT product_name, ecoscore_grade, nutriscore_grade, nova_groups, brands_tags, categories 
+                    FROM '{PARQUET_FILE}' 
+                    WHERE LENGTH(product_name) > 4
+                    ORDER BY 
+                        ecoscore_grade ASC NULLS LAST,
+                        nutriscore_grade ASC NULLS LAST,
+                        nova_groups ASC NULLS LAST
+                    """
+                all_products = con.execute(all_products_query).fetchall()
+
+                # Utiliser RapidFuzz pour trouver les correspondances les plus proches
+                product_names = [row[0] for row in all_products]
+                matches = extract(i, product_names, limit=5, scorer=partial_ratio)
+
+                # Extraire les informations des correspondances
+                results = [
+                    row
+                    for row in all_products
+                    if row[0] in [match[0] for match in matches]
+                ]
+                print("Meilleurs matchs rapidfuzz :", matches)
 
         if i not in response:
             response[i] = []
@@ -304,13 +465,13 @@ async def get_cuisiner(request: CuisinerRequest):
 
                 if isinstance(categories, str):
                     categories = categories.split(", ")
-
-                brands = brands[0]
+                if brands:
+                    brands = brands[0]
 
                 response[i].append(
                     RecoProduit(
                         nomProduit=product_name,
-                        indicateursDeQualite=indicateursDeQualite_1(
+                        indicateursDeQualite=IndicateursDeQualite1(
                             Nutriscore=nutriscore or None,
                             Nova=nova or None,
                             Ecoscore=ecoscore or None,
